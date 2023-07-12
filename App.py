@@ -1,9 +1,14 @@
 import aiohttp
 import asyncio
+from datetime import datetime
 
 
 class ApiClient:
-    API_URL = 'https://api.privatbank.ua/p24api/pubinfo?json&exchange&coursid=5'
+    BASE_URL = 'https://api.privatbank.ua/p24api/'
+    EXCHANGE_RATES_ENDPOINT = 'pubinfo?json&exchange&coursid=5'
+
+    def __init__(self):
+        self.api_url = f'{self.BASE_URL}{self.EXCHANGE_RATES_ENDPOINT}'
 
     async def get_exchange_rates(self, currency_codes, days):
         if days > 10:
@@ -15,22 +20,35 @@ class ApiClient:
         return results
 
     async def _fetch_exchange_rates(self, session, currency_code, days):
-        url = f'{self.API_URL}&ccy={currency_code}'
+        url = self._build_url(currency_code)
         async with session.get(url) as response:
             if response.status != 200:
                 raise Exception(f'Failed to fetch exchange rates for {currency_code}.')
 
             data = await response.json()
 
+        rates = self._create_rates_dict(data, days)
+        return {currency_code: rates}
+
+    def _build_url(self, currency_code):
+        return f'{self.api_url}&ccy={currency_code}'
+
+    def _create_rates_dict(self, data, days):
         rates = {}
         for currency_data in data:
-            date = currency_data['date']
-            if date <= days:
-                sale_rate = float(currency_data['sale'])
-                purchase_rate = float(currency_data['buy'])
-                rates[date] = {'sale': sale_rate, 'purchase': purchase_rate}
-
-        return {currency_code: rates}
+            if 'date' in currency_data:
+                date_str = currency_data['date']
+                try:
+                    date = datetime.strptime(date_str, '%d.%m.%Y')
+                    if (datetime.now() - date).days <= days:
+                        sale_rate = float(currency_data['sale'])
+                        purchase_rate = float(currency_data['buy'])
+                        rates[date.strftime('%d.%m.%Y')] = {'sale': sale_rate, 'purchase': purchase_rate}
+                except ValueError:
+                    print(f'Invalid date format: {date_str}')
+            else:
+                print('Date field not found in currency data:', currency_data)
+        return rates
 
 
 class CurrencyConverter:
@@ -53,43 +71,34 @@ class CurrencyConverter:
 
 
 class ConsoleApp:
-    async def run(self, base_currency, target_currencies, days):
-        currency_codes = [base_currency] + target_currencies
+    def __init__(self):
+        self.base_currency = 'USD'
+        self.target_currencies = ['EUR', 'GBP']
+        self.days = 10
+        self.api_client = ApiClient()
 
-        api_client = ApiClient()
+    async def run(self):
+        currency_codes = [self.base_currency] + self.target_currencies
+
         try:
-            exchange_rates = await api_client.get_exchange_rates(currency_codes, days)
+            exchange_rates = await self.api_client.get_exchange_rates(currency_codes, self.days)
         except Exception as e:
             print(f'Error: {e}')
             return
 
+        response_data = []
         for rates in exchange_rates:
+            currency_data = {}
             for currency_code, data in rates.items():
-                print(f'{currency_code}:')
+                currency_rates = {}
                 for date, rates in data.items():
-                    print(f'  {date}:')
-                    print(f'    sale: {rates["sale"]}')
-                    print(f'    purchase: {rates["purchase"]}')
-                    print()
+                    currency_rates[date] = {'sale': rates['sale'], 'purchase': rates['purchase']}
+                currency_data[currency_code] = currency_rates
+            response_data.append(currency_data)
 
-            print()
-
-        # Приклад конвертації
-        amount = 100
-        from_currency = base_currency
-        to_currency = target_currencies[0]
-
-        try:
-            converted_amount = CurrencyConverter.convert_amount(amount, from_currency, to_currency, exchange_rates[0])
-            print(f'{amount} {from_currency} = {converted_amount} {to_currency}')
-        except Exception as e:
-            print(f'Conversion error: {e}')
+        print(response_data)
 
 
 if __name__ == '__main__':
-    base_currency = 'USD'
-    target_currencies = ['EUR', 'GBP']
-    days = 10
-
     app = ConsoleApp()
-    asyncio.run(app.run(base_currency, target_currencies, days))
+    asyncio.run(app.run())
